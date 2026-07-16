@@ -1,0 +1,14 @@
+# Kwick_Merge working files
+*.merge-log.txt
+*.merging.mp3
+*.merging.m4a
+*.merging.m4b
+
+# Audio - never commit test books
+*.mp3
+*.m4a
+*.m4b
+
+# Windows
+Thumbs.db
+desktop.ini
