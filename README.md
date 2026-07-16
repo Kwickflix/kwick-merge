@@ -25,6 +25,7 @@ running in the background. One file that does one job and gets out of the way.
 [![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-5391FE?logo=powershell&logoColor=white)](#requirements)
 [![FFmpeg](https://img.shields.io/badge/requires-FFmpeg-007808?logo=ffmpeg&logoColor=white)](#requirements)
 [![Formats](https://img.shields.io/badge/MP3%20%7C%20M4A%20%7C%20M4B-supported-22a04a)](#supported-formats)
+[![License](https://img.shields.io/badge/license-MIT-22a04a)](LICENSE)
 
 [![Discord](https://img.shields.io/badge/discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/ruGAfxUmZ3)
 [![Telegram](https://img.shields.io/badge/telegram-join-26A5E4?logo=telegram&logoColor=white)](https://t.me/+8ifZv6x0sgAzOWE5)
@@ -396,6 +397,16 @@ Not yet — it's built around the prompts. A `-Silent` switch is a reasonable as
 ## Changelog
 
 See [CHANGELOG.md](CHANGELOG.md) for the full history.
+
+---
+
+## License
+
+[MIT](LICENSE) — do what you like with it. If it eats your audiobooks, that's on
+you, but read [the safety section](#your-files-are-safe--heres-exactly-why)
+first, because a lot of thought went into making sure it can't.
+
+FFmpeg is a separate project under its own licence and is not bundled here.
 
 ---
 
