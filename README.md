@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://kwickflix.shop/templates/twenty-one-custom/img/logov4.png" alt="KwickFlix" width="800">
+  <img src="screenshot.png" alt="Kwick_Merge merging a two-part audiobook" width="900">
 </p>
 
 # Kwick_Merge — Drag a Folder, Get One Audiobook
@@ -37,10 +37,6 @@ running in the background. One file that does one job and gets out of the way.
 *No install. No upload. Your files never leave your machine.*
 
 </div>
-
-<p align="center">
-  <img src="screenshot.png" alt="Kwick_Merge merging a two-part audiobook" width="900">
-</p>
 
 ---
 
