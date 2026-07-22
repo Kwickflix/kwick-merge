@@ -17,13 +17,22 @@ if "%~1"=="" (
   exit /b
 )
 
-REM The banner art needs 140+ columns, so open a window wide enough for it.
+REM No Windows Terminal at all - fall back to a plain console.
 where wt.exe >nul 2>&1
-if not errorlevel 1 (
-  wt.exe --size 150,40 --pos 0,0 --title Kwick_Merge powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%PS1%" -Folder "%~1"
+if errorlevel 1 (
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%PS1%" -Folder "%~1"
+  pause
   exit /b
 )
 
-REM No Windows Terminal - fall back to a plain console
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%PS1%" -Folder "%~1"
-pause
+REM If a Terminal window is already open, drop into it as a new TAB instead of
+REM spawning another window. Otherwise open a fresh window sized for the banner.
+tasklist /fi "imagename eq WindowsTerminal.exe" 2>nul | find /i "WindowsTerminal.exe" >nul
+if errorlevel 1 (
+  REM Nothing open - new window, 150 cols wide so the full banner fits.
+  wt.exe --size 150,40 --pos 0,0 --title Kwick_Merge powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%PS1%" -Folder "%~1"
+) else (
+  REM Terminal already open - new tab in the current window (inherits its size).
+  wt.exe -w 0 new-tab --title Kwick_Merge powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%PS1%" -Folder "%~1"
+)
+exit /b

@@ -3,20 +3,26 @@
 )
 
 <#
-Kwick_Merge
-WORKING + QUIET + CLEAN ONE-LINE PROGRESS (PowerShell 5.1 safe)
+Kwick_Merge 1.1.0
+https://github.com/Kwickflix/kwick-merge
+
+Merges the MP3/M4A/M4B files in a folder into one file. PowerShell 5.1 safe.
 
 • Drag-drop folder support via -Folder
-• Natural sort
-• No concat list
-• Minimal output
-• Shows % + ASCII bar
+• Natural sort, so "Part 2" comes before "Part 10"
+• No concat list - each file is a direct FFmpeg input
 • Output name = folder name, or type your own at the prompt
 • Auto output type = MP3, M4A, or M4B (based on inputs)
+• Chapters from EVERY file, shifted onto the merged timeline (see the
+  ffmetadata block below - FFmpeg alone would keep only the first file's)
+• Cover art and tags carried over; title set to the output name
+• Live progress: %, bar, elapsed, ETA. [Q] cancels mid-merge
 • Optionally deletes the source files (Recycle Bin) after a successful merge
 • Merges to a temp file, renamed at the end, so nothing is lost on failure
 • On ANY error: writes a log next to where the output would be
 • Always pauses at end (ENTER or SPACE)
+
+NOTE: keep this file saved as UTF-8 WITH BOM or the banner art turns to mojibake.
 #>
 
 $ffmpeg  = "ffmpeg"
@@ -245,6 +251,13 @@ function Get-SafeFileName([string]$name) {
     return $clean
 }
 
+function Escape-Meta([string]$s) {
+    # ffmetadata treats = ; # and \ as special, and a newline would end the value
+    if ($null -eq $s) { return "" }
+    $e = $s -replace '([=;#\\])', '\$1'
+    return ($e -replace "`r?`n", ' ')
+}
+
 function Ask-OutputName([string]$autoName, [string]$ext) {
     Write-Host ""
     Write-Host "Output name:" -ForegroundColor $cHead
@@ -337,6 +350,21 @@ if (-not (Test-Path -LiteralPath $folder -PathType Container)) {
 
 $script:folder = $folder
 Set-Location -LiteralPath $folder
+
+# Sweep up temp files abandoned by an earlier run (window closed mid-merge, power
+# cut, etc). A finished merge never leaves one behind, so any we find are junk.
+Get-ChildItem -LiteralPath $folder -File -ErrorAction SilentlyContinue |
+    Where-Object { $_.BaseName -like "*.merging" -and $_.Extension -in ".mp3", ".m4a", ".m4b" } |
+    ForEach-Object {
+        try {
+            Remove-Item -LiteralPath $_.FullName -Force -ErrorAction Stop
+            Write-Host "Cleaned up an abandoned part-file: " -NoNewline -ForegroundColor $cDim
+            Write-Host $_.Name -ForegroundColor $cTxt
+        } catch {
+            # Still locked - another merge is probably running on this folder
+            Write-Host "Note: '$($_.Name)' is in use - is another merge running?" -ForegroundColor $cName
+        }
+    }
 
 # Get MP3/M4A/M4B
 $files = Get-ChildItem -LiteralPath $folder -File | Where-Object {
@@ -454,15 +482,124 @@ Log "Detected type: $ext"
 Log "Output: $outFile"
 Log ("Delete sources after merge: " + $deleteSources)
 
-# Estimate total duration (seconds) using ffprobe
+# Probe every input once - duration AND chapters in a single call
+Write-Host "Reading chapters..." -ForegroundColor $cDim
+
 $totalSec = 0.0
+$probes   = @()
+
 foreach ($f in $files) {
-    $dur = & $ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 -- "$($f.FullName)" 2>$null
-    if ($dur) {
-        try { $totalSec += [double]$dur } catch {}
+    $info = $null
+    try {
+        $raw  = & $ffprobe -v error -show_chapters -show_entries format=duration -of json -- "$($f.FullName)" 2>$null
+        $info = ($raw -join "`n") | ConvertFrom-Json
+    } catch { }
+
+    $dur = 0.0
+    if ($info -and $info.format -and $info.format.duration) {
+        try { $dur = [double]$info.format.duration } catch { $dur = 0.0 }
     }
+
+    $chaps = @()
+    if ($info -and $info.chapters) { $chaps = @($info.chapters) }
+
+    $probes   += [pscustomobject]@{ File = $f; Duration = $dur; Chapters = $chaps }
+    $totalSec += $dur
 }
+
 if ($totalSec -le 0) { $totalSec = 1.0 }
+
+# One metadata file holds the book's tags and every chapter shifted onto the
+# merged timeline. Without it FFmpeg copies chapters from the FIRST input only,
+# so a two-part book keeps part one's chapters and the rest gets none.
+$metaLines = New-Object System.Collections.Generic.List[string]
+$metaLines.Add(";FFMETADATA1")
+
+# Keep the first file's tags (artist, album, year...) but retitle the output,
+# or a merged book stays titled "...: Part One".
+try {
+    $tagRaw = & $ffprobe -v error -show_entries format_tags -of json -- "$($files[0].FullName)" 2>$null
+    $tagObj = ($tagRaw -join "`n") | ConvertFrom-Json
+    if ($tagObj -and $tagObj.format -and $tagObj.format.tags) {
+        foreach ($p in $tagObj.format.tags.PSObject.Properties) {
+            if ($p.Name -ieq 'title') { continue }
+            if ($null -eq $p.Value -or "$($p.Value)".Trim().Length -eq 0) { continue }
+            $metaLines.Add((Escape-Meta $p.Name) + "=" + (Escape-Meta "$($p.Value)"))
+        }
+    }
+} catch { }
+
+$metaLines.Add("title=" + (Escape-Meta $bookName))
+
+$chapterCount = 0
+$offsetMs     = 0.0
+
+foreach ($p in $probes) {
+    if ($p.Chapters.Count -gt 0) {
+        foreach ($c in $p.Chapters) {
+            $cs = 0.0
+            $ce = 0.0
+            try { $cs = [double]$c.start_time } catch { }
+            try { $ce = [double]$c.end_time }   catch { }
+
+            $title = "Chapter"
+            if ($c.tags -and $c.tags.title) { $title = "$($c.tags.title)" }
+
+            $metaLines.Add("[CHAPTER]")
+            $metaLines.Add("TIMEBASE=1/1000")
+            $metaLines.Add("START=" + [int64][math]::Round(($cs * 1000.0) + $offsetMs))
+            $metaLines.Add("END="   + [int64][math]::Round(($ce * 1000.0) + $offsetMs))
+            $metaLines.Add("title=" + (Escape-Meta $title))
+            $chapterCount++
+        }
+    }
+    elseif ($p.Duration -gt 0) {
+        # No chapters in this one - give it a chapter named after the file, so a
+        # folder of plain MP3s still comes out navigable.
+        $metaLines.Add("[CHAPTER]")
+        $metaLines.Add("TIMEBASE=1/1000")
+        $metaLines.Add("START=" + [int64][math]::Round($offsetMs))
+        $metaLines.Add("END="   + [int64][math]::Round($offsetMs + ($p.Duration * 1000.0)))
+        $metaLines.Add("title=" + (Escape-Meta ([System.IO.Path]::GetFileNameWithoutExtension($p.File.Name))))
+        $chapterCount++
+    }
+
+    $offsetMs += $p.Duration * 1000.0
+}
+
+$metaPath = Join-Path $env:TEMP ("kwick-merge-" + [guid]::NewGuid().ToString("N") + ".ffmeta")
+try {
+    [System.IO.File]::WriteAllLines($metaPath, $metaLines, (New-Object System.Text.UTF8Encoding($false)))
+} catch {
+    Fail ("Could not write the chapter data: " + $_.Exception.Message)
+}
+
+# Cover art: pull it out to its own little file first.
+#
+# Do NOT map the picture stream straight out of the book. Audiobook cover tracks
+# are flagged attached_pic but carry the full runtime as their duration (57,000+
+# seconds), and mapping that makes FFmpeg chew through the entire input before it
+# writes a single byte - 13 minutes of 0% on a real book. Extracting the frame
+# first takes 0.2s, and attaching a 40KB jpeg costs nothing.
+$coverPath = $null
+try {
+    $v = & $ffprobe -v error -select_streams v:0 -show_entries stream=codec_name -of csv=p=0 -- "$($files[0].FullName)" 2>$null
+    if ($v) {
+        $coverExt = if ("$v" -match 'png') { ".png" } else { ".jpg" }
+        $candidate = Join-Path $env:TEMP ("kwick-merge-cover-" + [guid]::NewGuid().ToString("N") + $coverExt)
+        & $ffmpeg -hide_banner -v error -y -i "$($files[0].FullName)" -map 0:v:0 -frames:v 1 -c:v copy $candidate 2>$null
+        if ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath $candidate)) { $coverPath = $candidate }
+    }
+} catch { }
+$hasCover = [bool]$coverPath
+
+Write-Host " - Chapters: " -NoNewline -ForegroundColor $cDim
+Write-Host $chapterCount -NoNewline -ForegroundColor $cName
+Write-Host " across $($files.Count) files" -ForegroundColor $cDim
+Write-Host " - Cover art: " -NoNewline -ForegroundColor $cDim
+if ($hasCover) { Write-Host "yes" -ForegroundColor $cVal } else { Write-Host "none found" -ForegroundColor $cTxt }
+Log "Chapters written: $chapterCount"
+Log "Cover art: $hasCover"
 
 # Build FFmpeg args using direct inputs only
 $ffArgs = @(
@@ -476,12 +613,32 @@ foreach ($f in $files) {
     $ffArgs += @("-i", $f.FullName)
 }
 
+# The metadata file is just another input - its index follows the audio ones
+$metaIdx = $files.Count
+$ffArgs += @("-i", $metaPath)
+
+# ...and the extracted cover after that
+$coverIdx = -1
+if ($coverPath) {
+    $coverIdx = $files.Count + 1
+    $ffArgs += @("-i", $coverPath)
+}
+
 $filterInputs = for ($i = 0; $i -lt $files.Count; $i++) { "[{0}:a]" -f $i }
 $filterComplex = (($filterInputs -join '') + "concat=n=$($files.Count):v=0:a=1[aout]")
 
 $ffArgs += @(
     "-filter_complex", $filterComplex,
     "-map", "[aout]"
+)
+
+if ($coverIdx -ge 0) {
+    $ffArgs += @("-map", "$($coverIdx):v:0", "-c:v", "copy", "-disposition:v:0", "attached_pic")
+}
+
+$ffArgs += @(
+    "-map_metadata", "$metaIdx",
+    "-map_chapters", "$metaIdx"
 )
 
 if ($ext -eq ".mp3") {
@@ -513,17 +670,16 @@ function Format-Span([double]$sec) {
     return "{0:00}:{1:00}:{2:00}" -f [int][math]::Floor($ts.TotalHours), $ts.Minutes, $ts.Seconds
 }
 
-# Row the progress block starts on, so it can be overwritten instead of repeated
-$script:barTop = -1
-$script:canPos = $false
+# The progress block is two lines, redrawn in place. Instead of remembering an
+# absolute row (which goes stale the moment the window scrolls and leaves ghost
+# bars behind), we move the cursor RELATIVE to wherever it is right now - read
+# fresh each time, so scrolling can't desync it.
+$script:canPos        = $false
+$script:progressDrawn = $false
 
 function Init-Progress {
-    try {
-        $script:barTop = [Console]::CursorTop
-        $script:canPos = $true
-    } catch {
-        $script:canPos = $false
-    }
+    try { $null = [Console]::CursorTop; $script:canPos = $true } catch { $script:canPos = $false }
+    $script:progressDrawn = $false
 }
 
 function Show-Progress([double]$pct, [double]$elapsedSec, [double]$etaSec) {
@@ -532,8 +688,15 @@ function Show-Progress([double]$pct, [double]$elapsedSec, [double]$etaSec) {
     if ($filled -lt 0) { $filled = 0 }
     if ($filled -gt $width) { $filled = $width }
 
+    # After a draw the cursor sits at the end of line 2. To redraw, step up one
+    # line (to line 1) at column 0 - computed from the CURRENT cursor row.
     if ($script:canPos) {
-        try { [Console]::SetCursorPosition(0, $script:barTop) } catch { }
+        if ($script:progressDrawn) {
+            try {
+                $now = [Console]::CursorTop
+                [Console]::SetCursorPosition(0, [math]::Max(0, $now - 1))
+            } catch { }
+        }
     } else {
         Write-Host -NoNewline "`r"
     }
@@ -547,23 +710,99 @@ function Show-Progress([double]$pct, [double]$elapsedSec, [double]$etaSec) {
     Write-Host -NoNewline "]   " -ForegroundColor $cDim
     Write-Host ("Elapsed " + (Format-Span $elapsedSec) + "      ") -ForegroundColor $cTxt
 
-    # Line 2 - deliberately NO trailing newline, or the window would scroll
-    # every redraw and the saved row would drift.
+    # Line 2 - no trailing newline, so the cursor parks at its end for next time
     if ($etaSec -ge 0) {
         Write-Host -NoNewline ("                ETA " + (Format-Span $etaSec) + " remaining      ") -ForegroundColor $cDim
     } else {
         Write-Host -NoNewline "                ETA --:--:-- (estimating)      " -ForegroundColor $cDim
     }
 
-    # Re-anchor from where we actually ended up, so a scroll can't desync us
-    if ($script:canPos) {
-        try { $script:barTop = [Console]::CursorTop - 1 } catch { }
-    }
+    $script:progressDrawn = $true
 }
 
 function Quote-Arg([string]$a) {
     if ($a -match '[\s"]') { return '"' + ($a -replace '"', '\"') + '"' }
     return $a
+}
+
+# Tie FFmpeg's life to this script's. Closing the window kills PowerShell without
+# running any cleanup, and FFmpeg - a separate process - would otherwise carry on
+# encoding forever with nobody left to rename the file or stop it. A Job Object
+# with KILL_ON_JOB_CLOSE makes Windows itself kill the child when we die, however
+# we die: X button, Task Manager, crash.
+$script:jobReady = $false
+try {
+    if (-not ("KwickJob" -as [type])) {
+        Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+
+public static class KwickJob
+{
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    static extern IntPtr CreateJobObject(IntPtr a, string lpName);
+
+    [DllImport("kernel32.dll")]
+    static extern bool SetInformationJobObject(IntPtr hJob, int infoClass, IntPtr lpJobObjectInfo, uint cbJobObjectInfoLength);
+
+    [DllImport("kernel32.dll")]
+    static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct IO_COUNTERS
+    {
+        public ulong ReadOperationCount, WriteOperationCount, OtherOperationCount;
+        public ulong ReadTransferCount, WriteTransferCount, OtherTransferCount;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct JOBOBJECT_BASIC_LIMIT_INFORMATION
+    {
+        public long PerProcessUserTimeLimit, PerJobUserTimeLimit;
+        public uint LimitFlags;
+        public UIntPtr MinimumWorkingSetSize, MaximumWorkingSetSize;
+        public uint ActiveProcessLimit;
+        public UIntPtr Affinity;
+        public uint PriorityClass, SchedulingClass;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+    {
+        public JOBOBJECT_BASIC_LIMIT_INFORMATION BasicLimitInformation;
+        public IO_COUNTERS IoInfo;
+        public UIntPtr ProcessMemoryLimit, JobMemoryLimit, PeakProcessMemoryUsed, PeakJobMemoryUsed;
+    }
+
+    static IntPtr job = IntPtr.Zero;
+
+    public static bool Init()
+    {
+        job = CreateJobObject(IntPtr.Zero, null);
+        if (job == IntPtr.Zero) { return false; }
+
+        var ext = new JOBOBJECT_EXTENDED_LIMIT_INFORMATION();
+        ext.BasicLimitInformation.LimitFlags = 0x2000; // JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+
+        int len = Marshal.SizeOf(typeof(JOBOBJECT_EXTENDED_LIMIT_INFORMATION));
+        IntPtr p = Marshal.AllocHGlobal(len);
+        Marshal.StructureToPtr(ext, p, false);
+        bool ok = SetInformationJobObject(job, 9, p, (uint)len); // ExtendedLimitInformation
+        Marshal.FreeHGlobal(p);
+        return ok;
+    }
+
+    public static bool Add(IntPtr processHandle)
+    {
+        if (job == IntPtr.Zero) { return false; }
+        return AssignProcessToJobObject(job, processHandle);
+    }
+}
+"@
+    }
+    $script:jobReady = [KwickJob]::Init()
+} catch {
+    $script:jobReady = $false
 }
 
 function Test-CancelKey {
@@ -605,6 +844,14 @@ $errText = ""
 
 try {
     $proc = [System.Diagnostics.Process]::Start($psi)
+
+    # Hand FFmpeg to the job object, so closing this window takes it down too
+    if ($script:jobReady) {
+        try {
+            if ([KwickJob]::Add($proc.Handle)) { Log "FFmpeg attached to job object" }
+            else { Log "Could not attach FFmpeg to the job object" }
+        } catch { Log ("Job attach failed: " + $_.Exception.Message) }
+    }
 
     # Drain stderr in the background. If we left it unread, a chatty FFmpeg would
     # fill the 4KB pipe, block forever, and hang the whole script.
@@ -677,6 +924,13 @@ catch {
     $hadError = $true
     Log ("EXCEPTION: " + $_.Exception.Message)
     Log ("STACK: " + $_.ScriptStackTrace)
+}
+
+# The chapter and cover files have done their job, whatever happened next
+foreach ($tmp in @($metaPath, $coverPath)) {
+    if ($tmp -and (Test-Path -LiteralPath $tmp)) {
+        try { Remove-Item -LiteralPath $tmp -Force -ErrorAction Stop } catch { }
+    }
 }
 
 Write-Host ""
