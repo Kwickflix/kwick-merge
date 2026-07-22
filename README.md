@@ -20,7 +20,7 @@ running in the background. One file that does one job and gets out of the way.
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/version-1.0.0-22a04a)](https://github.com/Kwickflix/kwick-merge/releases/latest)
+[![Version](https://img.shields.io/badge/version-1.1.0-22a04a)](https://github.com/Kwickflix/kwick-merge/releases/latest)
 [![Platform](https://img.shields.io/badge/Windows-10%20%2F%2011-22a04a)](#requirements)
 [![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-5391FE?logo=powershell&logoColor=white)](#requirements)
 [![FFmpeg](https://img.shields.io/badge/requires-FFmpeg-007808?logo=ffmpeg&logoColor=white)](#requirements)
@@ -50,12 +50,14 @@ running in the background. One file that does one job and gets out of the way.
 6. [What you'll see](#what-youll-see)
 7. [The two questions it asks](#the-two-questions-it-asks)
 8. [Your files are safe — here's exactly why](#your-files-are-safe--heres-exactly-why)
-9. [Supported formats](#supported-formats)
-10. [How long does it take?](#how-long-does-it-take)
-11. [How it works under the hood](#how-it-works-under-the-hood)
-12. [Troubleshooting](#troubleshooting)
-13. [FAQ](#faq)
-14. [Changelog](#changelog)
+9. [Chapters, cover art and tags](#chapters-cover-art-and-tags)
+10. [Supported formats](#supported-formats)
+11. [How long does it take?](#how-long-does-it-take)
+12. [How it works under the hood](#how-it-works-under-the-hood)
+13. [Known limitations](#known-limitations)
+14. [Troubleshooting](#troubleshooting)
+15. [FAQ](#faq)
+16. [Changelog](#changelog)
 
 ---
 
@@ -72,6 +74,8 @@ order.
   wrong order is worse than no merge at all.
 - **Names the output for you** — defaults to the folder name, or type your own.
 - **Keeps or bins the parts** — your choice, and only ever *after* a successful merge.
+- **Keeps chapters, cover art and tags** — every chapter from every file, shifted
+  onto the merged timeline so all of them survive, not just the first file's.
 - **Live progress** — percentage, a real progress bar, elapsed time and an ETA.
 - **Cancel any time** — press `Q` and it stops cleanly, leaving everything as it was.
 - **Writes a log** if anything goes wrong, right next to the output.
@@ -141,9 +145,10 @@ That's it. There's no installer and nothing is written outside that folder.
 ### Why a `.cmd` and a `.ps1`?
 
 The `.cmd` is just a doorway. Windows won't let you drag a folder onto a
-PowerShell script directly, so the launcher takes the drop, opens a window wide
-enough for the banner (150 columns), and hands the folder to the script. The
-`.ps1` does all the real work.
+PowerShell script directly, so the launcher takes the drop and hands the folder
+to the script. If a Terminal window is already open it drops in as a new **tab**;
+otherwise it opens a fresh window sized wide enough for the banner (150 columns).
+The `.ps1` does all the real work.
 
 ---
 
@@ -273,6 +278,40 @@ rather than a shrug.
 
 ---
 
+## Chapters, cover art and tags
+
+A merged book keeps everything that made the parts navigable.
+
+**Chapters are stitched, not inherited.** This matters more than it sounds.
+Left to its own devices, FFmpeg copies chapters from the *first* input only — so
+a two-part book would come out with part one's chapters and **nothing at all**
+for the second half. Kwick_Merge reads the chapters out of every file, shifts
+each one by the running total of everything before it, and writes the whole set
+back. Merge a book with 39 + 29 chapters and you get all 68, landing where they
+should.
+
+**No chapters in your files?** Each file becomes one chapter, named after it.
+A folder of `Track 01.mp3` … `Track 12.mp3` merges into a single file you can
+still skip through track by track.
+
+**Cover art is carried over** from the first file and re-attached as proper
+embedded artwork, so your library still shows the book's cover.
+
+**Tags are carried over too** — artist, album, year and the rest — with one
+deliberate exception: the **title** is set to your output name. Otherwise a
+merged book inherits `"Binding 13: Part One"` as its title while actually
+containing the whole thing.
+
+| | Result |
+|---|---|
+| Chapters | **All of them**, offset onto the merged timeline |
+| Files with no chapters | One chapter each, named after the file |
+| Cover art | Kept (from the first file) |
+| Artist / album / year | Kept (from the first file) |
+| Title | Set to your output name |
+
+---
+
 ## Supported formats
 
 | Input | Output | Codec used |
@@ -320,6 +359,11 @@ For the curious, and for anyone who wants to check the sharp bits themselves:
   sorting, so `Part 2` lands before `Part 10`.
 - **Duration** — `ffprobe` totals every input up front. That total is what makes
   a real percentage and ETA possible.
+- **Chapter stitching** — every input is probed for its chapters and duration,
+  then a single `ffmetadata` file is written with each chapter's start/end shifted
+  by the running total of the files before it. It's fed to FFmpeg as an extra
+  input via `-map_metadata` / `-map_chapters`. (That file must be written **without
+  a BOM** — FFmpeg rejects it outright otherwise.)
 - **The merge** — one FFmpeg call with each file as its own `-i` input, joined
   by the `concat` filter. No concat demuxer, no list file, no temp playlist.
 - **Progress** — `-progress pipe:1` streams machine-readable progress; the
@@ -332,6 +376,20 @@ For the curious, and for anyone who wants to check the sharp bits themselves:
   whole thing solid. (Ask how we know.)
 - **The swap** — temp file renamed into place, old file recycled first if the
   name is taken.
+
+---
+
+## Known limitations
+
+**Cover art comes from the first file only.** If part one has no artwork but
+part two does, you get none. In practice every part of a book carries the same
+cover, so this rarely bites.
+
+**Tags come from the first file**, apart from the title, which is set to your
+output name. If your parts disagree about the album or year, part one wins.
+
+**No unattended mode.** It's built around the prompts; there's no `-Silent`
+switch yet.
 
 ---
 
@@ -370,8 +428,14 @@ No. Everything happens on your machine. The banner links to a website; the audio
 never goes near it.
 
 **Will it keep chapters?**
-No. Chapter markers and cover art are not carried across in this version. The
-audio is joined; the metadata isn't. It's on the list.
+Yes — every chapter from every file, shifted onto the merged timeline so they
+land in the right place. A two-part book with 39 and 29 chapters comes out with
+all 68, in order. Cover art and tags come across too. See
+[Chapters, cover art and tags](#chapters-cover-art-and-tags).
+
+**What if my files have no chapters at all?**
+Each file gets one chapter named after it. So a folder of `Track 01.mp3`,
+`Track 02.mp3` merges into one file you can still skip through.
 
 **Can I merge more than two files?**
 Yes, as many as you like. Two is just the minimum.
