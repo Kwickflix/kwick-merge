@@ -456,7 +456,7 @@ Not yet — it's built around the prompts. A `-Silent` switch is a reasonable as
 
 ## Changelog
 
-See [CHANGELOG.md](CHANGELOG.md) for the full history.
+See [Kwick Merge Changelog.md](Kwick%20Merge%20Changelog.md) for the full history.
 
 ---
 
