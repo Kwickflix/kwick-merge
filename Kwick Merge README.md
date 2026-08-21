@@ -14,6 +14,7 @@ It is a single PowerShell script wrapped around FFmpeg. No install, no
 dependencies to manage, no Python, no Node, nothing in your registry, nothing
 running in the background. One file that does one job and gets out of the way.
 
+> [!info]
 > Built because every "audiobook merger" is either a 200 MB Electron app, a
 > web uploader that wants your 700 MB file, or a wall of FFmpeg flags you have
 > to look up every single time.
@@ -86,7 +87,7 @@ order.
 
 Merging audio with FFmpeg by hand looks like this:
 
-```
+```bash
 ffmpeg -i "Part 1.m4b" -i "Part 2.m4b" -filter_complex "[0:a][1:a]concat=n=2:v=0:a=1[aout]" -map "[aout]" -c:a aac -b:a 96k "Book.m4b"
 ```
 
@@ -139,6 +140,7 @@ usual choice on Windows — and make sure its `bin` folder is on your `PATH`.
 
 That's it. There's no installer and nothing is written outside that folder.
 
+> [!tip]
 > **Optional:** give the shortcut a nicer icon and name. The script sets the
 > window title to `Kwick_Merge` on its own.
 
@@ -156,7 +158,7 @@ The `.ps1` does all the real work.
 
 **Drag a folder onto the shortcut.** Not the files — the *folder* they're in.
 
-```
+```text
 📁 Binding 13 (Boys of Tommen #1)
    ├── Binding 13 - Part 1.m4b     ─┐
    ├── Binding 13 - Part 2.m4b      ├─  drag this folder onto kwick-merge.cmd
@@ -179,7 +181,7 @@ press `Y` before touching anything.
 
 The whole run, start to finish:
 
-```
+```text
 === KWICK_MERGE ===
 === MP3 / M4A / M4B ===
 
@@ -325,6 +327,7 @@ the same type** — a folder mixing `.mp3` and `.m4b` is refused rather than
 silently guessed at, because the right answer there is your call, not the
 script's.
 
+> [!info]
 > **Note:** files are re-encoded, not stream-copied. That's what makes a pile of
 > parts with mismatched bitrates or sample rates join into one file that plays
 > cleanly the whole way through. 96 kbps AAC is transparent for spoken word.
